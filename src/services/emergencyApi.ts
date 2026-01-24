@@ -12,11 +12,13 @@ const API_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/emergency-ack
 
 async function apiRequest<T>(body: Record<string, unknown>): Promise<ApiResponse<T>> {
   try {
+    const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
     const response = await fetch(API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY,
+        'apikey': anonKey,
+        'Authorization': `Bearer ${anonKey}`,
       },
       body: JSON.stringify(body),
     });

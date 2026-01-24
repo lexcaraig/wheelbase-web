@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 import { getAlertInfo, acknowledgeAlert } from '../services/emergencyApi';
+import { pushAcknowledgmentToFirebase } from '../services/firebase';
 import {
   subscribeToLocationUpdates,
   subscribeToAlertStatus,
@@ -121,26 +122,40 @@ export function useEmergencyAlert(token: string | null): UseEmergencyAlertReturn
       const response = await acknowledgeAlert(token, type, options);
 
       if (response.success && response.data) {
+        const acknowledgmentData = {
+          id: response.data!.acknowledgmentId,
+          sos_alert_id: response.data!.sosAlertId,
+          contact_id: state.contact?.id || '',
+          acknowledgment_type: type,
+          message: options?.message || null,
+          eta_minutes: options?.etaMinutes || null,
+          responded_at: new Date().toISOString(),
+          latitude: null,
+          longitude: null,
+        };
+
         setState(prev => ({
           ...prev,
-          existingAcknowledgment: {
-            id: response.data!.acknowledgmentId,
-            sos_alert_id: response.data!.sosAlertId,
-            contact_id: prev.contact?.id || '',
-            acknowledgment_type: type,
-            message: options?.message || null,
-            eta_minutes: options?.etaMinutes || null,
-            responded_at: new Date().toISOString(),
-            latitude: null,
-            longitude: null,
-          },
+          existingAcknowledgment: acknowledgmentData,
         }));
+
+        // Push to Firebase for real-time sync with Flutter app
+        if (response.data!.sosAlertId && state.contact?.id) {
+          await pushAcknowledgmentToFirebase(response.data!.sosAlertId, {
+            id: response.data!.acknowledgmentId,
+            contact_id: state.contact.id,
+            acknowledgment_type: type,
+            eta_minutes: options?.etaMinutes,
+            message: options?.message,
+          });
+        }
+
         return true;
       }
 
       return false;
     },
-    [token]
+    [token, state.contact?.id]
   );
 
   return {

@@ -29,7 +29,7 @@ export function EmergencyResponsePage() {
     sendTextMessage,
     sendQuickStatus,
     isSending,
-  } = useChat(token || null, alert?.id || null, initialMessages);
+  } = useChat(token || null, alert?.id || null, contact?.id || null, initialMessages);
 
   // Loading state
   if (loading) {

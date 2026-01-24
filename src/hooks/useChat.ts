@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import { useState, useEffect, useCallback } from 'react';
 import { sendMessage, sendStatusUpdate } from '../services/emergencyApi';
-import { subscribeToChatMessages, unsubscribe } from '../services/realtime';
+import { subscribeToAllFirebaseMessages, pushMessageToFirebase } from '../services/firebase';
 import type { ChatMessage } from '../types/emergency';
 
 export interface UseChatReturn {
@@ -14,78 +13,101 @@ export interface UseChatReturn {
 export function useChat(
   token: string | null,
   alertId: string | null,
+  contactId: string | null,
   initialMessages: ChatMessage[]
 ): UseChatReturn {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [isSending, setIsSending] = useState(false);
-  const channelRef = useRef<RealtimeChannel | null>(null);
 
-  // Update messages when initial messages change
-  useEffect(() => {
-    setMessages(initialMessages);
-  }, [initialMessages]);
-
-  // Subscribe to real-time chat messages
+  // Subscribe to Firebase RTDB for real-time chat messages
   useEffect(() => {
     if (!alertId) return;
 
-    const channel = subscribeToChatMessages(alertId, (newMessage: ChatMessage) => {
-      setMessages(prev => {
-        // Avoid duplicates
-        if (prev.some(msg => msg.id === newMessage.id)) {
-          return prev;
-        }
-        return [...prev, newMessage];
-      });
+    console.log('[useChat] Subscribing to Firebase RTDB for alert:', alertId);
+
+    // Subscribe to all messages from Firebase
+    const unsubscribe = subscribeToAllFirebaseMessages(alertId, (firebaseMessages) => {
+      console.log('[useChat] Firebase messages updated:', firebaseMessages.length);
+      setMessages(firebaseMessages);
     });
 
-    channelRef.current = channel;
-
     return () => {
-      if (channelRef.current) {
-        unsubscribe(channelRef.current);
-        channelRef.current = null;
-      }
+      console.log('[useChat] Unsubscribing from Firebase RTDB');
+      unsubscribe();
     };
   }, [alertId]);
 
+  // Also update when initial messages change (from Supabase fetch)
+  useEffect(() => {
+    if (initialMessages.length > 0 && messages.length === 0) {
+      setMessages(initialMessages);
+    }
+  }, [initialMessages, messages.length]);
+
   const sendTextMessage = useCallback(
     async (content: string): Promise<boolean> => {
-      if (!token || !content.trim()) return false;
+      if (!token || !content.trim() || !alertId) return false;
 
       setIsSending(true);
 
       try {
+        // Send to Supabase via Edge Function (persists to database)
         const response = await sendMessage(token, content.trim());
 
         if (response.success) {
-          // The message will be added via real-time subscription
-          // But we can optimistically add it here for better UX
+          // Also push to Firebase RTDB for real-time sync
+          await pushMessageToFirebase(alertId, {
+            sender_type: 'contact',
+            sender_contact_id: contactId || undefined,
+            message_type: 'text',
+            content: content.trim(),
+          });
+
+          console.log('[useChat] Message sent and pushed to Firebase');
           return true;
         }
 
+        return false;
+      } catch (error) {
+        console.error('[useChat] Error sending message:', error);
         return false;
       } finally {
         setIsSending(false);
       }
     },
-    [token]
+    [token, alertId, contactId]
   );
 
   const sendQuickStatus = useCallback(
     async (statusCode: string): Promise<boolean> => {
-      if (!token) return false;
+      if (!token || !alertId) return false;
 
       setIsSending(true);
 
       try {
         const response = await sendStatusUpdate(token, statusCode);
-        return response.success;
+
+        if (response.success) {
+          // Also push status to Firebase RTDB
+          await pushMessageToFirebase(alertId, {
+            sender_type: 'contact',
+            sender_contact_id: contactId || undefined,
+            message_type: 'status_update',
+            content: statusCode,
+          });
+
+          return true;
+        }
+
+        return false;
+      } catch (error) {
+        console.error('[useChat] Error sending status:', error);
+        return false;
       } finally {
         setIsSending(false);
       }
     },
-    [token]
+    [token, alertId, contactId]
   );
 
   return {
